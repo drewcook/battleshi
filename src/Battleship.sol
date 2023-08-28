@@ -1,6 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {
+    IBattleship,
+    Game,
+    Location,
+    Player,
+    Point,
+    PointStatus,
+    Ship,
+    ShipType,
+    ShipOrientation
+} from "./structs/Structs.sol";
+
 // Layout of Contract:
 // version
 // imports
@@ -22,186 +35,102 @@ pragma solidity ^0.8.19;
 // private
 // view & pure functions
 
-/**
- * // Game
- * export interface ITurn {
- * 	id: number
- * 	playerName: string
- * 	guess: Location
- * 	result: PointStatus
- * }
- *
- * export interface IGame {
- * 	playerBoard: IBoard,
- * 	opponentBoard: IBoard,
- * 	player: IPlayer,
- * 	opponent: IPlayer,
- * 	public turns: ITurn[] = []
- * 	public winner: IPlayer | null = null
- * 	play(): void
- * 	addTurn(turn: ITurn): ITurn[]
- * 	declareWinner(player: IPlayer): void
- * }
- *
- *
- * // Board
- * export interface IBoard {
- * 	ocean: IPoint[][]
- * 	clearBoard(): void
- * 	getPoint(location: Location): IPoint
- * 	checkShipPlacement(ship: IShip, startLocation: Location): boolean
- * }
- *
- * // Location
- * export type Location = {
- * 	x: number,
- * 	y: number,
- * }
- *
- * // Points
- * export interface IPoint {
- * 	location: Location
- * 	status: PointStatus
- * 	updateStatus(status: PointStatus): void
- * }
- *
- * // Union (enum) for point statuses
- * export type PointStatus = 'Sunk' | 'Hit' | 'Miss' | 'Ship' | 'Empty'
- *
- * // Players
- * export interface IPlayer {
- * 	name: string
- * 	board: IBoar
- * 	fleet: IShip[]
- * 	allShipsDestroyed: boolean
- * 	guessedSpaces: Map<string, PointStatus>
- * 	placeShip(ship: IBaseShip, location: Location): void
- * 	receiveGuess(location: Location): PointStatus
- * 	makeGuess(location: Location, opponent: IPlayer): ITurn
- * }
- *
- * // Ships
- * // Union (enum) for ship types
- * export type ShipType = 'Destroyer' | 'Submarine' | 'Cruiser' | 'Battleship' | 'Carrier'
- *
- * export type ShipOrientation = 'horizontal' | 'vertical'
- *
- * export interface IBaseShip {
- * 	name: string,
- * 	orientation: ShipOrientation,
- * }
- *
- * export interface IShip extends IBaseShip {
- * 	type: ShipType
- * 	spacesOccupied: IPoint[]
- * 	size: number
- * 	isSunk(): boolean
- * 	sink(): void
- * }
- */
+contract Battleship is IBattleship, Ownable /*, CCIPReceiver */ {
+    Player public initiatingPlayer; // The player who starts a new game
+    Player public opposingPlayer; // The player who joins an existing game
+    uint256 public stake; // The amount required to play a game and win, should be double of the stake
 
-struct Game {
-    Board playerBoard;
-    Board opponentBoard;
-    Player player;
-    Player opponent;
-    Turn[] turns;
-    Player winner;
+    uint8 private immutable i_gridSize;
+
+    // mapping(uint64 => bool) public whitelistSourceChains;
+
+    error Battleship__ArbitraryDepositsNotSupported();
+
+    constructor(address _playerOne, uint8 _gridSize, uint256 _stake) payable {
+        _initialize(_playerOne, _gridSize);
+        // Initialize stake, support any amount
+        i_gridSize = _gridSize;
+        stake += _stake;
+    }
+
+    receive() external payable {
+        revert Battleship__ArbitraryDepositsNotSupported();
+    }
+
+    function deposit() external payable {
+        require(msg.value == stake, "Can only deposit the stake amount");
+        require(
+            msg.sender == initiatingPlayer.playerAddress || msg.sender == opposingPlayer.playerAddress,
+            "Only valid players can deposit"
+        );
+        stake += msg.value;
+    }
+
+    function registerOpponent(address _opposingPlayer, uint256 _stake) external payable onlyOwner {
+        require(initiatingPlayer.playerAddress != address(0) && opposingPlayer.playerAddress != address(0));
+        require(_opposingPlayer == address(0), "Player address cannot be the zero address");
+        require(_opposingPlayer != initiatingPlayer.playerAddress, "Player cannot play oneself");
+        require(_stake == stake, "Can only deposit the stake amount");
+
+        // opposingPlayer = Player(_opposingPlayer, _initializeBoard(i_gridSize), new Ship[](5), false);
+        stake += _stake;
+    }
+
+    // function playMove(uint64 _sourceChainSelector, uint8 _x, uint8 _y) public {
+    //     require(whitelistSourceChains[_sourceChainSelector], "Source chain not whitelisted");
+    // }
+
+    function _initialize(address _initiatingPlayer, uint8 _gridSize) private pure {
+        require(_initiatingPlayer != address(0), "Player one cannot be the zero address");
+        require(_gridSize <= type(uint8).max, "Grid size too large");
+        require(_gridSize > 5, "Grid size too small");
+        Ship[5] memory ships;
+        _initializeShips(ships);
+        // initiatingPlayer = Player(_initiatingPlayer, _initializeBoard(_gridSize), , false);
+
+        // Player memory opponent = Player(opponentName, _initializeBoard(_gridSize), new Ship[](5), false);
+        // Game memory game = Game(initiatingPlayer, opponent, address(0), defaultBoard, defaultBoard, new Turn[](0));
+    }
+
+    function _initializeBoard(uint8 _gridSize) private pure returns (Point[][] memory board) {
+        for (uint8 i = 0; i < _gridSize; i++) {
+            for (uint8 j = 0; j < _gridSize; j++) {
+                board[i][j] = Point(Location(i, j), PointStatus.Empty);
+                board[i][j] = Point(Location(i, j), PointStatus.Empty);
+            }
+        }
+    }
+
+    function _initializeShips(Ship[5] memory _ships) private pure {
+        Ship memory destroyer;
+        destroyer.shipType = ShipType.Destroyer;
+        destroyer.orientation = ShipOrientation.Horizontal;
+        destroyer.size = 2;
+
+        Ship memory submarine;
+        submarine.shipType = ShipType.Submarine;
+        submarine.orientation = ShipOrientation.Horizontal;
+        submarine.size = 3;
+
+        Ship memory cruiser;
+        cruiser.shipType = ShipType.Cruiser;
+        cruiser.orientation = ShipOrientation.Horizontal;
+        cruiser.size = 3;
+
+        Ship memory battleship;
+        battleship.shipType = ShipType.Battleship;
+        battleship.orientation = ShipOrientation.Horizontal;
+        battleship.size = 4;
+
+        Ship memory carrier;
+        carrier.shipType = ShipType.Carrier;
+        carrier.orientation = ShipOrientation.Horizontal;
+        carrier.size = 5;
+
+        _ships[0] = destroyer;
+        _ships[1] = submarine;
+        _ships[2] = cruiser;
+        _ships[3] = battleship;
+        _ships[4] = carrier;
+    }
 }
-
-struct Turn {
-    uint256 id;
-    string playerName;
-    Location guess;
-    PointStatus result;
-}
-
-struct Board {
-    Point[][] ocean;
-}
-
-struct Point {
-    Location location;
-    PointStatus status;
-}
-
-struct Location {
-    uint256 x;
-    uint256 y;
-}
-
-enum PointStatus {
-    Sunk,
-    Hit,
-    Miss,
-    Ship,
-    Empty
-}
-
-struct Player {
-    string name;
-    Board board;
-    Ship[] fleet;
-    bool allShipsDestroyed;
-    // mapping(string => PointStatus) guessedSpaces;
-}
-
-struct Ship {
-    string name;
-    ShipType shipType;
-    ShipOrientation orientation;
-    Point[] spacesOccupied;
-    uint256 size;
-    bool isSunk;
-}
-
-enum ShipType {
-    Destroyer,
-    Submarine,
-    Cruiser,
-    Battleship,
-    Carrier
-}
-
-enum ShipOrientation {
-    Horizontal,
-    Vertical
-}
-
-interface IGame {
-    function play() external;
-
-    function addTurn(Turn memory turn) external returns (Turn[] memory);
-
-    function declareWinner(Player memory player) external;
-}
-
-interface IPlayer {
-    function placeShip(Ship memory ship, Location memory location) external;
-
-    function receiveGuess(
-        Location memory location
-    ) external returns (PointStatus);
-
-    function makeGuess(
-        Location memory location,
-        Player memory opponent
-    ) external returns (Turn memory);
-}
-
-interface IBoard {
-    function clearBoard() external;
-
-    function getPoint(Location memory location) external returns (Point memory);
-
-    function checkShipPlacement(
-        Ship memory ship,
-        Location memory startLocation
-    ) external returns (bool);
-}
-
-interface IPoint {
-    function updateStatus(PointStatus status) external;
-}
-
-contract Battleship {}
